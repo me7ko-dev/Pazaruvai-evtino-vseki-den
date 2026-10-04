@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="bg">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Количка</title>
+  <meta name="description" content="Пиши списъка за пазар и виж кой магазин наблизо е най-евтин. Цени от kolkostruva.bg.">
+  <meta name="theme-color" content="#1f7a4d">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icon-192.png">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <img src="icon.svg" alt="" width="32" height="32">
+      <div>
+        <h1>Количка</h1>
+        <p id="dataDate" class="muted">Зареждане на цените…</p>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <section class="card" aria-labelledby="listTitle">
+      <h2 id="listTitle">Списък за пазар</h2>
+      <div class="search">
+        <input id="q" type="search" placeholder="Добави продукт: хляб, мляко, олио…" autocomplete="off" enterkeyhint="search" aria-label="Търси продукт">
+        <ul id="suggest" class="suggest" role="listbox" hidden></ul>
+      </div>
+      <div id="chips" class="chips" aria-label="Бързо добавяне"></div>
+      <ul id="basket" class="basket"></ul>
+      <p id="emptyBasket" class="muted center">Още няма нищо в списъка.</p>
+    </section>
+
+    <section class="card" aria-labelledby="whereTitle">
+      <h2 id="whereTitle">Къде пазаруваш</h2>
+      <div class="row">
+        <button id="locBtn" class="btn ghost" type="button">📍 Моето местоположение</button>
+        <span class="muted">или</span>
+        <select id="city" aria-label="Град">
+          <option value="">избери град…</option>
+        </select>
+      </div>
+      <p id="locStatus" class="muted small"></p>
+      <label class="row small">
+        Магазини до
+        <select id="radius">
+          <option value="2">2 км</option>
+          <option value="5" selected>5 км</option>
+          <option value="10">10 км</option>
+          <option value="25">25 км</option>
+          <option value="60">60 км</option>
+        </select>
+        от мен
+      </label>
+    </section>
+
+    <button id="go" class="btn primary big" type="button" disabled>Къде е най-евтино?</button>
+
+    <section id="results" class="results" aria-live="polite" hidden>
+      <div class="results-head">
+        <h2>Най-изгодни магазини</h2>
+        <div class="seg" role="tablist" aria-label="Подреди">
+          <button type="button" data-sort="price" class="on">Най-евтино</button>
+          <button type="button" data-sort="dist">Най-близо</button>
+        </div>
+      </div>
+      <p id="resultsNote" class="muted small"></p>
+      <ol id="resultList" class="result-list"></ol>
+    </section>
+  </main>
+
+  <footer class="muted small">
+    Цените са от отворените данни на <a href="https://kolkostruva.bg" target="_blank" rel="noopener">kolkostruva.bg</a> (КЗП), които търговците подават всеки ден.
+    Цената на касата може да е различна. Местата на магазините са от <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>.
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>
