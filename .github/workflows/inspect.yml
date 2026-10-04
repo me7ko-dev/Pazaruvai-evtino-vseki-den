@@ -1,34 +1,19 @@
 name: Преглед на данните
 
-# Показва как точно изглеждат файловете на kolkostruva.bg за даден ден.
+# Сваля последния ден от kolkostruva.bg и показва в лога какво има:
+# вериги, брой обекти, развалени редове и какви продукти има във всяка група (1–101).
 on:
   workflow_dispatch:
-    inputs:
-      date:
-        description: 'Дата (ГГГГ-ММ-ДД), празно = последните дни'
-        required: false
 
 jobs:
   inspect:
     runs-on: ubuntu-latest
     steps:
-      - name: Сваляне
-        run: |
-          for back in $(seq 0 20); do
-            d=${{ inputs.date }}
-            [ -z "$d" ] && d=$(date -u -d "-$back day" +%F)
-            code=$(curl -sS -o data.zip -w '%{http_code}' -A 'pazaruvai-evtino/0.1 (+https://github.com/me7ko-dev/pazaruvai-evtino-vseki-den)' "https://kolkostruva.bg/opendata_files/$d.zip" || true)
-            echo "$d: HTTP $code, $(stat -c %s data.zip 2>/dev/null) байта"
-            if [ "$code" = 200 ] && unzip -tq data.zip >/dev/null 2>&1; then echo "DATE=$d" >> $GITHUB_ENV; break; fi
-            [ -n "${{ inputs.date }}" ] && exit 1
-          done
-          unzip -o -q data.zip -d data
-      - name: Съдържание
-        run: |
-          echo "Дата: $DATE"
-          find data -type f -printf '%s\t%p\n' | sort -n
-          find data -type f -name '*.csv' -print0 | while IFS= read -r -d '' f; do
-            echo; echo "===== $f  ($(wc -l < "$f") реда)"
-            head -n 6 "$f"
-            echo "--- примерни категории:"; tail -n +2 "$f" | awk -F',' '{print $5}' | sort | uniq -c | sort -rn | head -n 5
-          done
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Населени места
+        run: node scripts/fetch-ekatte.mjs
+      - name: Отчет
+        run: node scripts/build-data.mjs --no-geocode --report

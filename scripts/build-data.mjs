@@ -2,8 +2,15 @@
 //
 //   node scripts/build-data.mjs                 сваля последния наличен ден
 //   node scripts/build-data.mjs --dir sample    чете CSV файлове от папка (за проба)
-//   node scripts/build-data.mjs --no-geocode    без търсене на адреси в OpenStreetMap
+//   --no-geocode                                без търсене на адреси в OpenStreetMap
+//   --max-geocode <брой>                        най-много нови адреси за едно пускане (1500)
 //   --geocache <файл>                           друг кеш с координати (по подразбиране data/geocache.json)
+//   --ekatte <файл>                             друг файл с населените места (по подразбиране data/ekatte.json)
+//   --report                                    отчет за веригите и групите продукти в лога
+//
+// Входни данни (формат на КЗП): CSV по един файл на търговец, с колони
+//   Населено място (код по ЕКАТТЕ) | Търговски обект | Наименование на продукта |
+//   Код на продукта | Категория (1–101) | Цена на дребно | Цена в промоция
 //
 // Резултат: site/data/meta.json и site/data/c/<град>.json
 
@@ -22,8 +29,13 @@ const opt = (name) => {
   return i >= 0 ? args[i + 1] : undefined;
 };
 const NO_GEOCODE = args.includes('--no-geocode');
+const REPORT = args.includes('--report');
 const MAX_GEOCODE = Number(opt('--max-geocode') ?? 1500);
 const GEOCACHE = path.resolve(opt('--geocache') ?? path.join(ROOT, 'data', 'geocache.json'));
+
+const readJson = (p, d) => (fs.existsSync(p) ? JSON.parse(fs.readFileSync(p, 'utf8')) : d);
+const EKATTE = readJson(path.resolve(opt('--ekatte') ?? path.join(ROOT, 'data', 'ekatte.json')), {}); // код → [име, ширина, дължина]
+const CATEGORY_NAMES = readJson(path.join(ROOT, 'data', 'categories.json'), {}); // номер → име
 
 // ---------- 1. Сваляне ----------
 
@@ -34,8 +46,7 @@ function isoDate(d) {
 async function downloadLatest(tmp) {
   const today = new Date();
   for (let back = 0; back < 21; back++) {
-    const d = new Date(today.getTime() - back * 86400000);
-    const date = isoDate(d);
+    const date = isoDate(new Date(today.getTime() - back * 86400000));
     const url = `https://kolkostruva.bg/opendata_files/${date}.zip`;
     const res = await fetch(url, { headers: { 'User-Agent': UA } }).catch((e) => ({ ok: false, status: e.message }));
     if (!res.ok) {
@@ -65,7 +76,7 @@ function listCsv(dir) {
     if (e.isDirectory()) out.push(...listCsv(p));
     else if (/\.csv$/i.test(e.name)) out.push(p);
   }
-  return out;
+  return out.sort();
 }
 
 // ---------- 2. Четене на CSV ----------
@@ -83,7 +94,7 @@ function splitCsvLine(line, delim) {
           i++;
         } else q = false;
       } else cur += c;
-    } else if (c === '"') q = true;
+    } else if (c === '"' && cur.trim() === '') q = true;
     else if (c === delim) {
       out.push(cur);
       cur = '';
@@ -91,6 +102,18 @@ function splitCsvLine(line, delim) {
   }
   out.push(cur);
   return out.map((s) => s.trim());
+}
+
+// Някои търговци слагат кавички вътре в полето без да ги удвояват
+// ("САЛВИЯ-Пожарна" ВЕЛИКО ТЪРНОВО...). Тогава полетата се броят отзад напред:
+// последните 4 колони са код, категория, цена и промоция и не съдържат запетаи.
+function splitLenient(line, delim, n) {
+  const parts = line.split(delim).map((s) => s.trim().replace(/^"+|"+$/g, ''));
+  if (parts.length < n) return null;
+  const tail = parts.slice(parts.length - 4);
+  const head = parts.slice(0, parts.length - 4);
+  // първите 2 са град и обект; всичко между тях и опашката е името на продукта
+  return [head[0], head[1], head.slice(2).join(delim), ...tail];
 }
 
 // Колоните се търсят по името им, не по реда, за да не зависим от точния формат.
@@ -121,36 +144,32 @@ function mapHeader(header) {
 function parsePrice(s) {
   if (!s) return NaN;
   const n = Number(String(s).replace(/\s/g, '').replace(',', '.').replace(/[^\d.]/g, ''));
-  return n > 0 && n < 10000 ? n : NaN;
+  return n > 0 && n < 10000 ? Math.round(n * 100) / 100 : NaN;
 }
 
-// Името на файла е името на фирмата; превръщаме го в познатото име на веригата.
+// Името на файла е „Марка (Фирма ООД)_ЕИК.csv“. Взимаме марката.
 // Цяла дума и на кирилица (\b в JS работи само с латиница).
 const word = (src) => new RegExp(`(?<![а-яa-z])(?:${src})(?![а-яa-z])`, 'i');
 const CHAINS = [
   ['лидл|lidl', 'Lidl'],
   ['кауфланд|kaufland', 'Kaufland'],
   ['бил+а|billa', 'BILLA'],
-  ['фантастико|ван холдинг|fantastico', 'Фантастико'],
+  ['фантастико|fantastico', 'Фантастико'],
   ['т\\s*-?\\s*маркет|t\\s*-?\\s*market', 'T MARKET'],
-  ['метро|metro', 'METRO'],
-  ['cba|си би ей', 'CBA'],
-  ['лекс|lex', 'Лекс'],
-  ['пени|penny', 'Penny'],
-  ['етап|etap', 'Етап'],
-  ['аванти|avanti', 'Аванти'],
-  ['супер ваня|vanya', 'Супер Ваня'],
-  ['софарма|sopharma', 'Софарма'],
-  ['субра|subra', 'Субра'],
-  ['марешки|mareshki', 'Марешки'],
   ['дм|dm', 'dm'],
 ].map(([src, name]) => [word(src), name]);
 
 function chainName(file) {
   const base = path.basename(file, path.extname(file)).replace(/[_-]?\d{9,13}$/, '').replace(/_/g, ' ').trim();
+  const brand = base.split(' (')[0].trim();
+  for (const [re, name] of CHAINS) if (re.test(brand)) return name;
+  if (brand && brand !== base) return brand;
   for (const [re, name] of CHAINS) if (re.test(base)) return name;
-  return base.replace(/\b(ЕООД|ООД|ЕАД|АД|ЕТ|КД|ЕНД КО)\b/gi, '').replace(/\s+/g, ' ').trim() || base;
+  return base.replace(/(?<![а-яa-z])(ЕООД|ООД|ЕАД|АД|ЕТ|КД|ЕНД КО)(?![а-яa-z])/gi, '').replace(/\s+/g, ' ').trim() || base;
 }
+
+// излишни кавички в краищата от развалени редове, двойни интервали
+const clean = (s) => (s ?? '').replace(/^["\s]+|["\s]+$/g, '').replace(/\s+/g, ' ');
 
 async function readCsv(file, onRow) {
   const rl = readline.createInterface({ input: fs.createReadStream(file, 'utf8'), crlfDelay: Infinity });
@@ -158,6 +177,7 @@ async function readCsv(file, onRow) {
   let delim = ',';
   let map = null;
   let rows = 0;
+  let bad = 0;
   for await (let line of rl) {
     if (!header) {
       line = line.replace(/^﻿/, '');
@@ -165,27 +185,44 @@ async function readCsv(file, onRow) {
       delim = [',', ';', '\t'].reduce((a, b) => (line.split(b).length > line.split(a).length ? b : a));
       header = splitCsvLine(line, delim);
       map = mapHeader(header);
-      console.log(`  колони: ${JSON.stringify(header)} → ${JSON.stringify(map)}`);
+      if (map.category == null || map.price == null) console.log(`  ⚠ непознати колони: ${JSON.stringify(header)}`);
       continue;
     }
     if (!line.trim()) continue;
-    const f = splitCsvLine(line, delim);
+    let f = splitCsvLine(line, delim);
+    if (f.length !== header.length) f = header.length === 7 ? splitLenient(line, delim, 7) : null;
+    if (!f) {
+      bad++;
+      continue;
+    }
     onRow({
       city: f[map.city] ?? '',
-      store: f[map.store] ?? '',
-      product: f[map.product] ?? '',
-      category: f[map.category] ?? '',
+      store: clean(f[map.store]),
+      product: clean(f[map.product]),
+      category: (f[map.category] ?? '').trim(),
       price: parsePrice(f[map.price]),
       promo: parsePrice(f[map.promo]),
     });
     rows++;
   }
-  return rows;
+  return { rows, bad };
 }
 
-// ---------- 3. Местоположение (OpenStreetMap / Nominatim, кеширано) ----------
+// ---------- 3. Населени места и адреси ----------
 
-const geocache = fs.existsSync(GEOCACHE) ? JSON.parse(fs.readFileSync(GEOCACHE, 'utf8')) : {};
+// Кодът по ЕКАТТЕ е 5 цифри; някои го подават без водещите нули („702“ = „00702“ Асеновград).
+function resolveCity(raw) {
+  const s = raw.trim();
+  if (/^\d{1,5}$/.test(s)) {
+    const code = s.padStart(5, '0');
+    const e = EKATTE[code];
+    return { key: code, name: e?.[0] || `Населено място ${code}`, ll: e ? [e[1], e[2]] : null };
+  }
+  const name = s.replace(/^(гр\.|град|с\.|село)\s*/i, '').replace(/\s+/g, ' ').trim();
+  return { key: name.toLowerCase(), name, ll: null };
+}
+
+const geocache = readJson(GEOCACHE, {});
 let geocoded = 0;
 let lastGeo = 0;
 
@@ -212,32 +249,38 @@ async function geocode(query) {
 
 function saveGeocache() {
   fs.mkdirSync(path.dirname(GEOCACHE), { recursive: true });
-  const sorted = Object.fromEntries(Object.entries(geocache).sort(([a], [b]) => a.localeCompare(b)));
-  fs.writeFileSync(GEOCACHE, JSON.stringify(sorted, null, 0).replace(/],"/g, '],\n"').replace(/null,"/g, 'null,\n"') + '\n');
+  const entries = Object.entries(geocache).sort(([a], [b]) => a.localeCompare(b));
+  fs.writeFileSync(GEOCACHE, '{\n' + entries.map(([k, v]) => `${JSON.stringify(k)}:${JSON.stringify(v)}`).join(',\n') + '\n}\n');
 }
+
+// Адресът за търсене: обектът без вътрешни номера на магазина („0164 - Мосю Бриколаж - София - бул. …“).
+function addressQuery(store, city) {
+  let a = store.replace(/^\s*[\dA-Z]{2,}[\s.-]+/, '').replace(/\s*[-–]\s*/g, ', ');
+  if (!a.toLowerCase().includes(city.name.toLowerCase())) a += `, ${city.name}`;
+  return `${a}, България`;
+}
+
+// Пропускаме търсене за обекти без нищо като адрес („МАГАЗИН ЖИЗЕЛ 1“) – OpenStreetMap
+// няма как да ги намери, а всяка заявка струва секунда.
+const looksLikeAddress = (s) => /(ул\.|улица|бул\.|булевард|ж\.?\s?к\.?|кв\.|пл\.|площад|шосе|№|\d{1,3}[а-яa-z]?\s*$)/i.test(s);
 
 // ---------- 4. Сглобяване ----------
-
-function cleanCity(s) {
-  return s.replace(/^(гр\.|град|с\.|село)\s*/i, '').replace(/\s+/g, ' ').trim();
-}
 
 function slug(s) {
   const tr = { а: 'a', б: 'b', в: 'v', г: 'g', д: 'd', е: 'e', ж: 'zh', з: 'z', и: 'i', й: 'y', к: 'k', л: 'l', м: 'm', н: 'n', о: 'o', п: 'p', р: 'r', с: 's', т: 't', у: 'u', ф: 'f', х: 'h', ц: 'ts', ч: 'ch', ш: 'sh', щ: 'sht', ъ: 'a', ь: 'y', ю: 'yu', я: 'ya' };
   return s.toLowerCase().split('').map((c) => tr[c] ?? c).join('').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'x';
 }
 
-const STOP = new Set(['и', 'с', 'в', 'за', 'от', 'на', 'бр', 'кг', 'гр', 'г', 'л', 'мл', 'бг', 'пакет', 'опаковка']);
+const STOP = new Set(['и', 'с', 'в', 'за', 'от', 'на', 'бр', 'кг', 'гр', 'г', 'л', 'мл', 'бг', 'пакет', 'опаковка', 'кутия', 'вакум']);
+const words = (s) => s.toLowerCase().split(/[^a-zа-я]+/i).filter((w) => w.length > 2 && !STOP.has(w));
 
-// Когато категорията е само номер: взимаме началните думи от имената на продуктите,
-// които са сред най-честите в категорията („Прясно мляко 3% Верея“ → „Прясно мляко“).
+// Когато няма зададено име: началните думи от най-честите имена на продукти.
 function guessName(kw, examples) {
   const top = new Set(kw.slice(0, 3));
   let best = '';
   for (const ex of examples) {
-    const words = ex.split(/\s+/);
     const lead = [];
-    for (const w of words) {
+    for (const w of ex.split(/\s+/)) {
       if (!top.has(w.toLowerCase())) break;
       lead.push(w);
     }
@@ -247,6 +290,9 @@ function guessName(kw, examples) {
   return best.charAt(0).toUpperCase() + best.slice(1).toLowerCase();
 }
 
+const inc = (m, k, by = 1) => m.set(k, (m.get(k) ?? 0) + by);
+const top = (m, n) => [...m.entries()].sort((a, b) => b[1] - a[1]).slice(0, n);
+
 async function main() {
   const tmp = fs.mkdtempSync(path.join(fs.realpathSync('/tmp'), 'pazar-'));
   const src = opt('--dir') ? { date: opt('--date') ?? isoDate(new Date()), dir: path.resolve(opt('--dir')) } : await downloadLatest(tmp);
@@ -254,101 +300,106 @@ async function main() {
   if (!files.length) throw new Error(`Няма CSV файлове в ${src.dir}`);
 
   const stores = new Map(); // ключ: верига|град|обект
-  const catWords = new Map(); // категория → брой думи в имената на продуктите
-  const catNames = new Map();
-  const catExamples = new Map(); // категория → няколко имена на продукти
+  const cities = new Map(); // ключ на града → {name, ll}
+  const cat = new Map(); // категория → {rows, words: Map, heads: Map, examples: []}
+  const unknownCities = new Map();
   let total = 0;
   let skipped = 0;
 
   for (const file of files) {
     const chain = chainName(file);
-    console.log(`${chain}  (${path.basename(file)})`);
-    const n = await readCsv(file, (r) => {
-      const cat = r.category.trim();
+    const fileStores = new Set();
+    const fileCities = new Set();
+    const { rows, bad } = await readCsv(file, (r) => {
       const best = Number.isFinite(r.promo) && (!Number.isFinite(r.price) || r.promo < r.price) ? r.promo : r.price;
-      if (!cat || !Number.isFinite(best) || !r.store) {
+      if (!/^\d{1,3}$/.test(r.category) || !Number.isFinite(best) || !r.store || !r.city) {
         skipped++;
         return;
       }
-      const city = cleanCity(r.city);
-      const key = `${chain}|${city}|${r.store}`;
+      const city = resolveCity(r.city);
+      if (!cities.has(city.key)) cities.set(city.key, city);
+      if (!city.ll) inc(unknownCities, `${r.city} (${chain})`);
+      const key = `${chain}|${city.key}|${r.store}`;
       let s = stores.get(key);
-      if (!s) stores.set(key, (s = { chain, city, addr: r.store.replace(/\s+/g, ' ').trim(), items: new Map() }));
-      const cur = s.items.get(cat);
-      if (!cur || best < cur[0]) s.items.set(cat, [best, r.product.replace(/\s+/g, ' ').trim(), Number.isFinite(r.promo) && r.promo === best ? 1 : 0]);
+      if (!s) stores.set(key, (s = { chain, city: city.key, addr: r.store, items: new Map() }));
+      fileStores.add(key);
+      fileCities.add(city.key);
+      const cur = s.items.get(r.category);
+      if (!cur || best < cur[0]) s.items.set(r.category, [best, r.product, Number.isFinite(r.promo) && r.promo === best ? 1 : 0]);
 
-      // Име на категорията: ако колоната е текст, ползваме нея; иначе думите от продуктите.
-      if (!/^\d+$/.test(cat)) catNames.set(cat, cat);
-      const ex = catExamples.get(cat) ?? [];
-      if (ex.length < 50) catExamples.set(cat, [...ex, r.product]);
-      let words = catWords.get(cat);
-      if (!words) catWords.set(cat, (words = new Map()));
-      for (const w of r.product.toLowerCase().split(/[^a-zа-я]+/i)) {
-        if (w.length > 2 && !STOP.has(w)) words.set(w, (words.get(w) ?? 0) + 1);
-      }
+      let c = cat.get(r.category);
+      if (!c) cat.set(r.category, (c = { rows: 0, words: new Map(), heads: new Map(), examples: [] }));
+      c.rows++;
+      if (c.examples.length < 60) c.examples.push(r.product);
+      const ws = words(r.product);
+      for (const w of ws) inc(c.words, w);
+      if (ws.length) inc(c.heads, ws.slice(0, 2).join(' '));
     });
-    total += n;
-    console.log(`  ${n} реда`);
+    total += rows;
+    const sample = [...fileStores].slice(0, 3).map((k) => k.split('|')[2]);
+    console.log(`${chain}: ${rows} реда${bad ? `, ${bad} развалени` : ''}, ${fileStores.size} обекта в ${fileCities.size} места  · ${sample.join(' · ')}`);
   }
-  console.log(`Общо ${total} реда, ${stores.size} магазина, ${catWords.size} категории, пропуснати ${skipped}`);
+  console.log(`\nОбщо ${total} реда, ${stores.size} обекта, ${cities.size} населени места, ${cat.size} групи, пропуснати ${skipped}`);
+  if (unknownCities.size) console.log(`Непознати кодове на места: ${top(unknownCities, 15).map(([k, n]) => `${k}×${n}`).join(', ')}`);
 
-  // Категории: име + ключови думи за търсене
-  const categories = [...catWords.entries()]
-    .map(([id, words]) => {
-      const kw = [...words.entries()].sort((a, b) => b[1] - a[1]).slice(0, 12).map(([w]) => w);
-      return { id, name: catNames.get(id) ?? guessName(kw, catExamples.get(id) ?? []), kw };
+  // Групи продукти: име + думи за търсене
+  const storesPerCat = new Map();
+  for (const s of stores.values()) for (const id of s.items.keys()) inc(storesPerCat, id);
+  const categories = [...cat.entries()]
+    .map(([id, c]) => {
+      const kw = top(c.words, 15).map(([w]) => w);
+      return { id, name: CATEGORY_NAMES[id] ?? guessName(kw, c.examples), kw, n: storesPerCat.get(id) ?? 0 };
     })
-    .sort((a, b) => (Number(a.id) || 0) - (Number(b.id) || 0) || a.id.localeCompare(b.id));
+    .sort((a, b) => Number(a.id) - Number(b.id));
 
-  // Градове и координати
-  const cityNames = [...new Set([...stores.values()].map((s) => s.city))].sort((a, b) => a.localeCompare(b, 'bg'));
-  const cities = [];
-  for (const name of cityNames) {
-    const ll = await geocode(`${name}, България`);
-    cities.push({ name, ll: ll ?? null });
+  if (REPORT) {
+    console.log('\n===== Групи продукти =====');
+    for (const c of categories) {
+      const h = cat.get(c.id);
+      console.log(`${c.id.padStart(3)} | ${c.name} | ${h.rows} реда, ${c.n} обекта | ${top(h.heads, 8).map(([k, n]) => `${k}(${n})`).join(', ')}`);
+    }
   }
 
-  // Магазини: точен адрес, ако го намерим; иначе центъра на града
+  // Места на магазините: точен адрес, ако го намерим; иначе центъра на населеното място
   const byCity = new Map();
+  let exact = 0;
   for (const s of stores.values()) {
-    const city = cities.find((c) => c.name === s.city);
-    let ll = await geocode(`${s.addr}, ${s.city}, България`);
+    const city = cities.get(s.city);
+    let ll = looksLikeAddress(s.addr) ? await geocode(addressQuery(s.addr, city)) : undefined;
     let approx = 0;
-    if (!ll) {
-      ll = city?.ll ?? null;
+    if (ll) exact++;
+    else {
+      ll = city.ll;
       approx = 1;
     }
     if (!byCity.has(s.city)) byCity.set(s.city, []);
-    byCity.get(s.city).push({
-      ch: s.chain,
-      addr: s.addr,
-      ll,
-      approx,
-      it: Object.fromEntries([...s.items.entries()].map(([k, v]) => [k, v])),
-    });
+    byCity.get(s.city).push({ ch: s.chain, addr: s.addr, ll, approx, it: Object.fromEntries(s.items) });
   }
   saveGeocache();
-  console.log(`Геокодирани нови адреси: ${geocoded}`);
+  console.log(`Точен адрес: ${exact} от ${stores.size} обекта. Нови търсения в OpenStreetMap: ${geocoded}`);
 
   // Запис
   fs.rmSync(OUT, { recursive: true, force: true });
   fs.mkdirSync(path.join(OUT, 'c'), { recursive: true });
   const usedSlugs = new Set();
   const cityIndex = [];
-  for (const c of cities) {
-    let file = slug(c.name);
+  for (const [key, c] of cities) {
+    const list = byCity.get(key);
+    if (!list) continue;
+    let file = /^\d{5}$/.test(key) ? `${slug(c.name)}-${key}` : slug(c.name);
     while (usedSlugs.has(file)) file += '-2';
     usedSlugs.add(file);
-    const list = byCity.get(c.name) ?? [];
     fs.writeFileSync(path.join(OUT, 'c', `${file}.json`), JSON.stringify({ stores: list }));
     cityIndex.push({ name: c.name, ll: c.ll, n: list.length, file });
   }
-  const chains = [...new Set([...stores.values()].map((s) => s.chain))].sort();
+  cityIndex.sort((a, b) => a.name.localeCompare(b.name, 'bg'));
+  const chains = [...new Set([...stores.values()].map((s) => s.chain))].sort((a, b) => a.localeCompare(b, 'bg'));
   fs.writeFileSync(
     path.join(OUT, 'meta.json'),
     JSON.stringify({ date: src.date, built: new Date().toISOString(), categories, chains, cities: cityIndex }),
   );
-  console.log(`Готово: ${OUT} (дата на цените ${src.date})`);
+  const size = fs.readdirSync(path.join(OUT, 'c')).reduce((n, f) => n + fs.statSync(path.join(OUT, 'c', f)).size, 0);
+  console.log(`Готово: ${cityIndex.length} места, ${(size / 1e6).toFixed(1)} MB (дата на цените ${src.date})`);
 }
 
 main().catch((e) => {
