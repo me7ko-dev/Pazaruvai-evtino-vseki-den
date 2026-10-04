@@ -282,8 +282,12 @@ function addressQueries(store, city) {
   return short && short !== a ? [full, `${short}, ${city.name}, България`] : [full];
 }
 
-async function locate(store, city) {
-  for (const q of addressQueries(store, city)) {
+// Ако веригата има само един магазин в населеното място, OpenStreetMap често го намира
+// и по марка („Lidl, Септември“), дори когато адресът е непълен или липсва.
+async function locate(store, city, chain, onlyOneInCity) {
+  const queries = addressQueries(store, city);
+  if (onlyOneInCity) queries.push(`${chain}, ${city.name}, България`);
+  for (const q of queries) {
     const ll = await geocode(q);
     if (ll) return ll;
   }
@@ -396,9 +400,11 @@ async function main() {
   // Места на магазините: точен адрес, ако го намерим; иначе центъра на населеното място
   const byCity = new Map();
   let exact = 0;
+  const perChainCity = new Map();
+  for (const s of stores.values()) inc(perChainCity, `${s.chain}|${s.city}`);
   for (const s of stores.values()) {
     const city = cities.get(s.city);
-    let ll = await locate(s.addr, city);
+    let ll = await locate(s.addr, city, s.chain, perChainCity.get(`${s.chain}|${s.city}`) === 1);
     let approx = 0;
     if (ll) exact++;
     else {
