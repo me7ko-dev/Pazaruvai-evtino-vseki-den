@@ -125,7 +125,7 @@ function search(q) {
       return { c, score };
     })
     .filter(Boolean)
-    .sort((a, b) => a.score - b.score || a.c.name.localeCompare(b.c.name, 'bg'))
+    .sort((a, b) => a.score - b.score || (b.c.n ?? 0) - (a.c.n ?? 0) || a.c.name.localeCompare(b.c.name, 'bg'))
     .slice(0, 10)
     .map((m) => m.c);
 }
@@ -338,7 +338,7 @@ function render() {
           <div class="sum"><b>${eur(r.total)}</b><span class="diff">${diff}</span></div>
         </div>
         <div class="tags">${dist}${status}${promos ? `<span class="tag">${promos} в промоция</span>` : ''}</div>
-        <details><summary>Какво влиза в сумата</summary><ul class="lines">${lines}</ul></details>
+        <details><summary>Какво влиза в сумата</summary><p class="muted small">Най-евтиният продукт от всяка група в този магазин.</p><ul class="lines">${lines}</ul></details>
         <a class="route" href="https://www.google.com/maps/dir/?api=1&destination=${dest}" target="_blank" rel="noopener">Маршрут до магазина →</a>
       </li>`;
     })

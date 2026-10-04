@@ -9,6 +9,13 @@
 
 - **Цени:** отворените данни на [kolkostruva.bg](https://kolkostruva.bg/opendata) на КЗП.
   Големите търговци подават цените на 101 основни стоки всеки ден до 12:00.
+  Към октомври 2026: ~950 000 цени от ~1800 магазина в ~170 населени места
+  (Lidl, Kaufland, T MARKET, Фантастико, dm, Минимарт, CBA, Метро, аптеки и др.).
+- **Населени места:** данните идват с код по ЕКАТТЕ; имената и координатите са от
+  Wikidata (`scripts/fetch-ekatte.mjs` → `data/ekatte.json`).
+- **Имена на групите:** `data/categories.json` (КЗП дава само номер 1–101).
+  Сирене, кашкавал и яйца са по две групи при КЗП – тук са слети в една.
+- Онлайн магазини, складове и безмитни магазини не се показват.
 - **Места на магазините:** адресите от данните се търсят в OpenStreetMap (Nominatim),
   по една заявка в секунда, и се пазят в `data/geocache.json`, за да не се търсят пак.
   Ако адрес не се намери, магазинът се показва в центъра на града (разстоянието е с „≈“).
@@ -20,7 +27,7 @@
 | Приложението (HTML/CSS/JS, без сборка) | `site/` |
 | Сваляне и подреждане на цените | `scripts/build-data.mjs` |
 | Всеки ден в 13:17 сваля цените и обновява сайта | `.github/workflows/daily.yml` |
-| Бутон „Преглед на данните“ – как изглеждат файловете на КЗП | `.github/workflows/inspect.yml` |
+| Бутон „Преглед на данните“ – отчет за веригите и групите в лога | `.github/workflows/inspect.yml` |
 | Примерни данни за проба без интернет | `sample/`, `scripts/make-sample.mjs` |
 
 За всяка стока от списъка в магазина се взима **най-евтиният продукт** от тази група
@@ -29,7 +36,8 @@
 ## На компютъра
 
 ```bash
-node scripts/build-data.mjs --dir sample --no-geocode --geocache sample/geocache.json   # примерни данни
+node scripts/make-sample.mjs                                                             # примерни данни
+node scripts/build-data.mjs --dir sample --no-geocode --geocache sample/geocache.json --ekatte sample/ekatte.json
 node scripts/build-data.mjs                                                              # истинските (иска интернет)
 cd site && python3 -m http.server 8000                                                   # http://localhost:8000
 ```

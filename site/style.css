@@ -140,6 +140,7 @@ input:focus-visible, select:focus-visible, button:focus-visible { outline: 2px s
 .tag.warn { background: var(--warn-soft); color: var(--warn); border-color: transparent; }
 .tag.ok { background: var(--accent-soft); color: var(--accent); border-color: transparent; }
 details { margin-top: 8px; }
+details p { margin: 6px 0 0; }
 summary { cursor: pointer; font-size: .875rem; color: var(--accent); }
 .lines { list-style: none; margin: 6px 0 0; padding: 0; font-size: .875rem; }
 .lines li { display: flex; justify-content: space-between; gap: 10px; padding: 4px 0; border-top: 1px dashed var(--line); }

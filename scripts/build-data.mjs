@@ -37,6 +37,12 @@ const readJson = (p, d) => (fs.existsSync(p) ? JSON.parse(fs.readFileSync(p, 'ut
 const EKATTE = readJson(path.resolve(opt('--ekatte') ?? path.join(ROOT, 'data', 'ekatte.json')), {}); // код → [име, ширина, дължина]
 const CATEGORY_NAMES = readJson(path.join(ROOT, 'data', 'categories.json'), {}); // номер → име
 
+// Групи, които за купувача са едно и също (КЗП ги дели на две, напр. сирене насипно и пакетирано).
+const MERGE = { 9: '8', 11: '10', 32: '31' };
+
+// Обекти, в които не се пазарува на място: онлайн магазини, складове, безмитни зони.
+const NOT_A_SHOP = /онлайн|online|https?:\/\/|централен склад|терминал|дюфри|duty free|travel free/i;
+
 // ---------- 1. Сваляне ----------
 
 function isoDate(d) {
@@ -164,7 +170,6 @@ function chainName(file) {
   const brand = base.split(' (')[0].trim();
   for (const [re, name] of CHAINS) if (re.test(brand)) return name;
   if (brand && brand !== base) return brand;
-  for (const [re, name] of CHAINS) if (re.test(base)) return name;
   return base.replace(/(?<![а-яa-z])(ЕООД|ООД|ЕАД|АД|ЕТ|КД|ЕНД КО)(?![а-яa-z])/gi, '').replace(/\s+/g, ' ').trim() || base;
 }
 
@@ -253,16 +258,37 @@ function saveGeocache() {
   fs.writeFileSync(GEOCACHE, '{\n' + entries.map(([k, v]) => `${JSON.stringify(k)}:${JSON.stringify(v)}`).join(',\n') + '\n}\n');
 }
 
-// Адресът за търсене: обектът без вътрешни номера на магазина („0164 - Мосю Бриколаж - София - бул. …“).
-function addressQuery(store, city) {
-  let a = store.replace(/^\s*[\dA-Z]{2,}[\s.-]+/, '').replace(/\s*[-–]\s*/g, ', ');
-  if (!a.toLowerCase().includes(city.name.toLowerCase())) a += `, ${city.name}`;
-  return `${a}, България`;
+// Адрес за търсене в OpenStreetMap от полето „Търговски обект“. Търговците го пишат
+// всеки по своему („238 - Септември/ул. Христо Ботев74“, „Кауфланд София-Младост - rp.София,ул. Филип Аврамов 3“,
+// „обект: НДК адрес: гр. София ул.Фритьоф Нансен 37 А“), затова взимаме частта от първата
+// дума за улица нататък и добавяме населеното място. Без такава дума („МАГАЗИН ЖИЗЕЛ 1“)
+// не търсим – OpenStreetMap няма как да го намери, а всяка заявка струва секунда.
+const STREET = /(?<![а-яa-z])(ул\.?|улица|бул\.?|булевард|ж\.?\s?к\.?|кв\.|пл\.|площад|шосе)(?![а-яa-z])/i;
+
+function addressQueries(store, city) {
+  let a = store
+    .replace(/(?<![а-яa-z])rp\./gi, 'гр.')
+    .replace(/^.*адрес:\s*/i, '')
+    .replace(/[„“"]/g, '')
+    .replace(/№\s*/g, '')
+    .replace(/\//g, ', ')
+    .replace(/([а-яa-z])(\d)/gi, '$1 $2'); // „Ботев74“ → „Ботев 74“
+  const m = STREET.exec(a);
+  if (!m) return [];
+  a = a.slice(m.index);
+  a = a.replace(/,?\s*(ет\.?|етаж|мн\.?|магазин|маг\.)\s*\S+.*$/i, '').replace(/\s+/g, ' ').trim().replace(/[,\s]+$/, '');
+  const full = `${a}, ${city.name}, България`;
+  const short = a.split(',')[0].trim();
+  return short && short !== a ? [full, `${short}, ${city.name}, България`] : [full];
 }
 
-// Пропускаме търсене за обекти без нищо като адрес („МАГАЗИН ЖИЗЕЛ 1“) – OpenStreetMap
-// няма как да ги намери, а всяка заявка струва секунда.
-const looksLikeAddress = (s) => /(ул\.|улица|бул\.|булевард|ж\.?\s?к\.?|кв\.|пл\.|площад|шосе|№|\d{1,3}[а-яa-z]?\s*$)/i.test(s);
+async function locate(store, city) {
+  for (const q of addressQueries(store, city)) {
+    const ll = await geocode(q);
+    if (ll) return ll;
+  }
+  return null;
+}
 
 // ---------- 4. Сглобяване ----------
 
@@ -305,6 +331,7 @@ async function main() {
   const unknownCities = new Map();
   let total = 0;
   let skipped = 0;
+  let notShop = 0;
 
   for (const file of files) {
     const chain = chainName(file);
@@ -316,6 +343,11 @@ async function main() {
         skipped++;
         return;
       }
+      if (NOT_A_SHOP.test(r.store) || NOT_A_SHOP.test(chain)) {
+        notShop++;
+        return;
+      }
+      r.category = MERGE[r.category] ?? r.category;
       const city = resolveCity(r.city);
       if (!cities.has(city.key)) cities.set(city.key, city);
       if (!city.ll) inc(unknownCities, `${r.city} (${chain})`);
@@ -325,7 +357,8 @@ async function main() {
       fileStores.add(key);
       fileCities.add(city.key);
       const cur = s.items.get(r.category);
-      if (!cur || best < cur[0]) s.items.set(r.category, [best, r.product, Number.isFinite(r.promo) && r.promo === best ? 1 : 0]);
+      const name = r.product.length > 70 ? r.product.slice(0, 69) + '…' : r.product;
+      if (!cur || best < cur[0]) s.items.set(r.category, [best, name, Number.isFinite(r.promo) && r.promo === best ? 1 : 0]);
 
       let c = cat.get(r.category);
       if (!c) cat.set(r.category, (c = { rows: 0, words: new Map(), heads: new Map(), examples: [] }));
@@ -337,9 +370,9 @@ async function main() {
     });
     total += rows;
     const sample = [...fileStores].slice(0, 3).map((k) => k.split('|')[2]);
-    console.log(`${chain}: ${rows} реда${bad ? `, ${bad} развалени` : ''}, ${fileStores.size} обекта в ${fileCities.size} места  · ${sample.join(' · ')}`);
+    console.log(`${chain} [${path.basename(file)}]: ${rows} реда${bad ? `, ${bad} развалени` : ''}, ${fileStores.size} обекта в ${fileCities.size} места  · ${sample.join(' · ')}`);
   }
-  console.log(`\nОбщо ${total} реда, ${stores.size} обекта, ${cities.size} населени места, ${cat.size} групи, пропуснати ${skipped}`);
+  console.log(`\nОбщо ${total} реда, ${stores.size} обекта, ${cities.size} населени места, ${cat.size} групи, пропуснати ${skipped}, не са магазини ${notShop}`);
   if (unknownCities.size) console.log(`Непознати кодове на места: ${top(unknownCities, 15).map(([k, n]) => `${k}×${n}`).join(', ')}`);
 
   // Групи продукти: име + думи за търсене
@@ -365,7 +398,7 @@ async function main() {
   let exact = 0;
   for (const s of stores.values()) {
     const city = cities.get(s.city);
-    let ll = looksLikeAddress(s.addr) ? await geocode(addressQuery(s.addr, city)) : undefined;
+    let ll = await locate(s.addr, city);
     let approx = 0;
     if (ll) exact++;
     else {
