@@ -300,10 +300,24 @@ async function run() {
 
 function render() {
   const rows = [...lastResults];
-  const byPrice = (a, b) => a.missing.length - b.missing.length || a.total - b.total;
-  const byDist = (a, b) => (a.dist ?? 1e9) - (b.dist ?? 1e9) || byPrice(a, b);
-  rows.sort(sortBy === 'price' ? byPrice : byDist);
-  const top = rows.slice(0, 10);
+  // Разстоянието е сигурно само при намерен адрес; иначе е до центъра на града.
+  const near = (r) => (r.dist != null && !r.s.approx ? r.dist : 1e9);
+  const byPrice = (a, b) => a.missing.length - b.missing.length || a.total - b.total || near(a) - near(b);
+  const byDist = (a, b) => near(a) - near(b) || byPrice(a, b);
+
+  // Веригите често имат еднаква цена навсякъде: магазините от една верига с една и съща
+  // сметка стават един ред – най-близкият от тях, плюс „още N магазина“.
+  const groups = new Map();
+  for (const r of rows) {
+    const key = `${r.s.ch}|${r.total.toFixed(2)}|${r.missing.join(',')}`;
+    const g = groups.get(key);
+    if (!g) groups.set(key, { ...r, more: 0 });
+    else {
+      g.more++;
+      if (near(r) < near(g)) Object.assign(g, { s: r.s, dist: r.dist, lines: r.lines });
+    }
+  }
+  const top = [...groups.values()].sort(sortBy === 'price' ? byPrice : byDist).slice(0, 10);
   const full = rows.filter((r) => !r.missing.length);
   const cheapest = full.length ? Math.min(...full.map((r) => r.total)) : null;
 
@@ -315,7 +329,13 @@ function render() {
     .map((r, i) => {
       const s = r.s;
       const diff = cheapest != null && !r.missing.length && r.total > cheapest + 0.005 ? `+${eur(r.total - cheapest)}` : '';
-      const dist = r.dist == null ? '' : `<span class="tag">${s.approx ? '≈ ' : ''}${r.dist < 1 ? Math.round(r.dist * 1000) + ' м' : r.dist.toFixed(1).replace('.', ',') + ' км'}</span>`;
+      const dist =
+        r.dist == null
+          ? ''
+          : s.approx
+            ? `<span class="tag" title="Адресът не е намерен на картата">адресът не е на картата</span>`
+            : `<span class="tag">${r.dist < 1 ? Math.round(r.dist * 1000) + ' м' : r.dist.toFixed(1).replace('.', ',') + ' км'}</span>`;
+      const more = r.more ? `<span class="tag">+ още ${r.more} ${r.more === 1 ? 'магазин' : 'магазина'} ${esc(s.ch)} със същата сума</span>` : '';
       const status = r.missing.length
         ? `<span class="tag warn">липсва: ${esc(r.missing.map(catName).join(', '))}</span>`
         : `<span class="tag ok">има всичко</span>`;
@@ -337,7 +357,7 @@ function render() {
           </div>
           <div class="sum"><b>${eur(r.total)}</b><span class="diff">${diff}</span></div>
         </div>
-        <div class="tags">${dist}${status}${promos ? `<span class="tag">${promos} в промоция</span>` : ''}</div>
+        <div class="tags">${dist}${status}${more}${promos ? `<span class="tag">${promos} в промоция</span>` : ''}</div>
         <details><summary>Какво влиза в сумата</summary><p class="muted small">Най-евтиният продукт от всяка група в този магазин.</p><ul class="lines">${lines}</ul></details>
         <a class="route" href="https://www.google.com/maps/dir/?api=1&destination=${dest}" target="_blank" rel="noopener">Маршрут до магазина →</a>
       </li>`;
