@@ -9,6 +9,7 @@ on:
 
 permissions:
   contents: write
+  pages: write
 
 concurrency:
   group: pages
@@ -50,3 +51,13 @@ jobs:
           git add -A
           git commit -q -m "Цени от $(jq -r .date data/meta.json)"
           git push -f -q "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" gh-pages
+
+      # Опит да се включи GitHub Pages от клона gh-pages, ако още не е включен.
+      # Ако GitHub не разреши: Settings → Pages → Branch: gh-pages → Save.
+      - name: Включване на GitHub Pages
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/${{ github.repository }}/pages" >/dev/null 2>&1 && { echo "Pages вече е включен"; exit 0; }
+          gh api -X POST "repos/${{ github.repository }}/pages" -f "source[branch]=gh-pages" -f "source[path]=/"
