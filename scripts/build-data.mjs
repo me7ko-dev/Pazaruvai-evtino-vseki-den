@@ -14,7 +14,7 @@ import readline from 'node:readline';
 
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
 const OUT = path.join(ROOT, 'site', 'data');
-const UA = 'kolichka/0.1 (+https://github.com/me7ko-dev/kolichka)';
+const UA = 'pazaruvai-evtino/0.1 (+https://github.com/me7ko-dev/pazaruvai-evtino-vseki-den)';
 
 const args = process.argv.slice(2);
 const opt = (name) => {
@@ -248,7 +248,7 @@ function guessName(kw, examples) {
 }
 
 async function main() {
-  const tmp = fs.mkdtempSync(path.join(fs.realpathSync('/tmp'), 'kolichka-'));
+  const tmp = fs.mkdtempSync(path.join(fs.realpathSync('/tmp'), 'pazar-'));
   const src = opt('--dir') ? { date: opt('--date') ?? isoDate(new Date()), dir: path.resolve(opt('--dir')) } : await downloadLatest(tmp);
   const files = listCsv(src.dir);
   if (!files.length) throw new Error(`Няма CSV файлове в ${src.dir}`);

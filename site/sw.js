@@ -1,5 +1,5 @@
 // Приложението работи и без интернет с последните заредени цени.
-const CACHE = 'kolichka-v1';
+const CACHE = 'pazar-v1';
 const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'manifest.webmanifest', 'icon.svg'];
 
 self.addEventListener('install', (e) => {

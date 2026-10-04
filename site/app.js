@@ -5,7 +5,7 @@
 const store = {
   get(k, d) {
     try {
-      const v = localStorage.getItem('kolichka.' + k);
+      const v = localStorage.getItem('pazar.' + k);
       return v == null ? d : JSON.parse(v);
     } catch {
       return d;
@@ -13,7 +13,7 @@ const store = {
   },
   set(k, v) {
     try {
-      localStorage.setItem('kolichka.' + k, JSON.stringify(v));
+      localStorage.setItem('pazar.' + k, JSON.stringify(v));
     } catch {}
   },
 };
